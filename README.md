@@ -73,17 +73,32 @@ and repeats until the model calls `finish`.
                           action == finish ? ──► done
 ```
 
-Two things make this robust on a small model:
+Three things make this robust on a small model:
 
 1. **Aggressive context management.** The on-device context window is tiny, so
    FoundationCode manages history itself: every file read and command output is
    capped, recent steps are kept verbatim, and older steps are compressed or
-   dropped to stay within a character budget.
+   dropped to stay within a character budget (well under half the window, to
+   leave room for the model's own output).
 2. **Failure recovery.** Greedy decoding can make a small model repeat the same
    malformed reply forever, so after any bad action FoundationCode switches to
    sampling to break the loop, normalizes common formatting slips (e.g. an
-   argument packed into the action field), and bails out early rather than
-   spinning.
+   argument packed into the action field), and bails out after a few tries
+   instead of spinning. Even a context-overflow error from the model is treated
+   as a recoverable "be terse" nudge, not a crash.
+3. **Self-regulation (it knows when to stop).** A small model will happily
+   re-read the same file thirteen times. A `ProgressTracker` fingerprints every
+   action by its *resolved* path (so `.gitignore` and `/abs/.gitignore` are the
+   same action) and remembers every observation it has seen. When the model
+   repeats an action and gets back content it has already seen — i.e. it learned
+   nothing — FoundationCode escalates: first a firm nudge (and a switch to
+   sampling), then a graceful stop. It stops *itself* long before the step cap,
+   and it can call `ask_user` to hand a decision back to you rather than guess.
+
+> The step cap (`--max-steps`, default 25) is a safety backstop, not a target.
+> With progress detection the agent almost always finishes, asks, or stops on
+> its own well before reaching it — and when it does hit the cap, it says so
+> instead of failing silently.
 
 ---
 
@@ -157,13 +172,15 @@ fmcode
 The agent has a deliberately small toolset — fewer tools means a small model
 uses them more reliably.
 
-| Action       | Arguments        | What it does                                  |
-|--------------|------------------|-----------------------------------------------|
-| `list_dir`   | `path`           | List a directory                              |
-| `read_file`  | `path`           | Read a file (with line numbers, size-capped)  |
-| `write_file` | `path`, `content`| Create/overwrite a file (full contents)       |
-| `run_bash`   | `command`        | Run a shell command (grep, tests, git, …)     |
-| `finish`     | `content`        | Stop and return a summary to you              |
+| Action        | Arguments        | What it does                                  |
+|---------------|------------------|-----------------------------------------------|
+| `list_dir`    | `path`           | List a directory                              |
+| `read_file`   | `path`           | Read a file (with line numbers, size-capped)  |
+| `write_file`  | `path`, `content`| Create/overwrite a file (full contents)       |
+| `delete_file` | `path`           | Delete a file (working dir only, never `.git`)|
+| `run_bash`    | `command`        | Run a shell command (grep, tests, git, …)     |
+| `ask_user`    | `content`        | Ask you a question instead of guessing        |
+| `finish`      | `content`        | Stop and return a summary to you              |
 
 `run_bash` covers searching, running tests, and git, so the surface stays tiny.
 
@@ -182,6 +199,12 @@ approval modes and a hard safety net:
 A **command denylist** hard-blocks catastrophic commands (`rm -rf /`, fork
 bombs, `mkfs`, `dd` onto a device, `shutdown`, …) **even in `--auto` mode**, so
 auto-approve can't be tricked into wiping your disk.
+
+`delete_file` is **contained to the working directory** — it refuses to delete
+anything outside it, the working directory itself, or anything inside `.git`,
+even with `--auto`. The agent also only operates inside the directory you point
+it at; ask it to clean up "your whole device" and it can't (and is told to say
+so).
 
 > Still: review what it's about to do. It's a small model and it makes mistakes.
 
@@ -223,6 +246,36 @@ to pretend the model is bigger than it is.
 
 ---
 
+## Prior art & design notes
+
+FoundationCode's self-regulation is deliberately borrowed from how the better
+open-source terminal agents avoid runaway loops — adapted for a model far
+smaller than the ones they target:
+
+- **[OpenHands](https://github.com/All-Hands-AI/OpenHands)** — its
+  `controller/stuck.py` detects repeated identical action/observation pairs and
+  alternation cycles with cheap structural checks (no extra model calls). That's
+  the core idea behind our `ProgressTracker`.
+- **[RA.Aid](https://github.com/ai-christianson/RA.Aid)** and
+  **[Cline](https://github.com/cline/cline)** — duplicate-tool-call
+  fingerprinting and a low "consecutive mistakes" ceiling (3) before escalating
+  to the user. We use the same ceiling.
+- **[Aider](https://github.com/Aider-AI/aider)** — caps reflective error-retries
+  (`max_reflections = 3`) and feeds errors back as targeted corrections rather
+  than blind retries.
+- **[Gemini CLI](https://github.com/google-gemini/gemini-cli)** — a dedicated
+  loop-detection service (identical-tool-call and repeated-content detection)
+  and a turn cap that escalates instead of dying.
+- **[OpenAI Codex CLI](https://github.com/openai/codex)** — the cautionary tale:
+  native tool-calling with *no* loop bound shipped a real runaway bug. Always
+  bound the loop, even with structured output.
+
+The difference here is scale: those tools drive frontier models that mostly know
+when to stop. FoundationCode drives a few-billion-parameter on-device model that
+doesn't, so the harness has to be the adult in the room — hence forced JSON
+actions, resolved-path fingerprinting, already-seen-content detection, and a
+hard but graceful stop.
+
 ## Development
 
 ```bash
@@ -241,6 +294,7 @@ foundationcode/
   schema.py    # action schema + system prompt
   parsing.py   # JSON extraction, normalization, validation
   context.py   # context-window budgeting
+  progress.py  # no-progress / loop detection
   tools.py     # tools + safety/approval layer
   agent.py     # the agent loop
   ui.py        # terminal rendering

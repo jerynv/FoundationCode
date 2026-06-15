@@ -54,11 +54,25 @@ class Tools:
             "list_dir": self._list_dir,
             "read_file": self._read_file,
             "write_file": self._write_file,
+            "delete_file": self._delete_file,
             "run_bash": self._run_bash,
         }.get(name)
         if handler is None:
             return name, f"error: '{name}' is not an executable tool"
         return handler(action)
+
+    def signature(self, action: dict) -> str:
+        """A stable identity for an action, used for loop detection.
+
+        Paths are resolved so ``.gitignore`` and ``/abs/.gitignore`` collapse to
+        the same signature. Content is excluded so repeated writes to the same
+        file also register as a repeat.
+        """
+        name = action.get("action", "")
+        path = action.get("path")
+        cmd = (action.get("command") or "").strip()
+        resolved = self._resolve(path) if path else ""
+        return f"{name}|{resolved}|{cmd}"
 
     # -- helpers ----------------------------------------------------------
 
@@ -73,6 +87,11 @@ class Tools:
         if not os.path.isabs(path):
             path = os.path.join(self.cwd, path)
         return os.path.normpath(path)
+
+    def _within_cwd(self, resolved: str) -> bool:
+        """True if ``resolved`` is the working dir or strictly inside it."""
+        p = os.path.abspath(resolved)
+        return p == self.cwd or p.startswith(self.cwd + os.sep)
 
     def _rel(self, path: str) -> str:
         try:
@@ -163,6 +182,33 @@ class Tools:
             f"ok: {'overwrote' if existed else 'created'} {rel} "
             f"({len(content)} bytes, {content.count(chr(10)) + 1} lines)"
         )
+
+    def _delete_file(self, action: dict) -> tuple[str, str]:
+        path = self._resolve(action["path"])
+        rel = self._rel(path)
+        label = f"delete_file {rel}"
+        # Containment: never delete outside the working directory, the working
+        # directory itself, or anything inside .git — even with --auto.
+        if not self._within_cwd(path):
+            return label, "blocked: refusing to delete outside the working directory"
+        if os.path.abspath(path) == self.cwd:
+            return label, "blocked: refusing to delete the working directory itself"
+        if ".git" in os.path.relpath(path, self.cwd).split(os.sep):
+            return label, "blocked: refusing to delete anything inside .git"
+        if not os.path.exists(path):
+            return label, f"error: no such file: {rel}"
+        if os.path.isdir(path):
+            return label, (
+                f"error: {rel} is a directory; delete files individually or use "
+                "run_bash for directories"
+            )
+        if not self._approve(f"Delete {rel}", "(this file will be permanently removed)"):
+            return label, "blocked: user declined (or read-only mode)"
+        try:
+            os.remove(path)
+        except OSError as exc:
+            return label, f"error: {exc}"
+        return label, f"ok: deleted {rel}"
 
     def _run_bash(self, action: dict) -> tuple[str, str]:
         command = action["command"]

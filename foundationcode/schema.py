@@ -10,10 +10,13 @@ the decoder accepts.
 
 from __future__ import annotations
 
-ALLOWED_ACTIONS = ("list_dir", "read_file", "write_file", "run_bash", "finish")
+ALLOWED_ACTIONS = (
+    "list_dir", "read_file", "write_file", "delete_file", "run_bash",
+    "ask_user", "finish",
+)
 
 # Mutating actions require approval unless running with --auto.
-MUTATING_ACTIONS = ("write_file", "run_bash")
+MUTATING_ACTIONS = ("write_file", "delete_file", "run_bash")
 
 ACTION_SCHEMA: dict = {
     # Apple's guided-generation decoder requires the root type's `title`.
@@ -29,18 +32,23 @@ ACTION_SCHEMA: dict = {
         "action": {
             "type": "string",
             "description": (
-                "exactly one of: list_dir, read_file, write_file, run_bash, finish"
+                "exactly one of: list_dir, read_file, write_file, delete_file, "
+                "run_bash, ask_user, finish"
             ),
         },
         "path": {
             "type": "string",
-            "description": "file or directory path for list_dir, read_file, write_file",
+            "description": (
+                "file or directory path for list_dir, read_file, write_file, "
+                "delete_file"
+            ),
         },
         "content": {
             "type": "string",
             "description": (
                 "for write_file: the COMPLETE new file contents. "
-                "for finish: your final answer/summary for the user."
+                "for ask_user: the single question to ask the user. "
+                "for finish: your final answer/summary (or why you stopped)."
             ),
         },
         "command": {
@@ -53,26 +61,35 @@ ACTION_SCHEMA: dict = {
 
 SYSTEM_PROMPT = (
     "You are FoundationCode, an autonomous coding agent running on the user's "
-    "Mac. You finish the user's task by taking ONE action at a time and reading "
-    "the result before the next action.\n"
+    "Mac. You complete a task by taking ONE action at a time and reading its "
+    "result before the next action.\n"
     "\n"
     "Reply with JSON only, matching the schema. Fields:\n"
     "- thought: one short sentence about your next move.\n"
-    "- action: exactly one of list_dir, read_file, write_file, run_bash, finish.\n"
-    "- path: for list_dir / read_file / write_file.\n"
-    "- content: for write_file (the COMPLETE file) or finish (final answer).\n"
+    "- action: one of list_dir, read_file, write_file, delete_file, run_bash, "
+    "ask_user, finish.\n"
+    "- path: for list_dir / read_file / write_file / delete_file.\n"
+    "- content: for write_file (the COMPLETE file), ask_user (your question), "
+    "or finish (final answer).\n"
     "- command: for run_bash (one shell command).\n"
     "\n"
-    "Rules:\n"
-    "- Explore before you edit: list_dir and read_file to understand the code.\n"
-    "- write_file replaces the whole file, so include the entire new content.\n"
-    "- Use run_bash for grep/find, running tests, git, and shell edits.\n"
-    "- Make the SMALLEST change that satisfies the task. Do not add features, "
-    "type hints, extra tests, or refactors that were not requested.\n"
-    "- Do exactly what was asked, then verify it ONCE (run it or the test).\n"
-    "- The moment the task is verified working, use action finish immediately. "
-    "Never keep editing code that already works.\n"
-    "- Never repeat an action that already succeeded or already failed; if you "
-    "are unsure whether you are done, you are done — call finish.\n"
-    "- finish's content is a short summary of what you did, for the user."
+    "Scope and judgement:\n"
+    "- You work ONLY inside the working directory shown below. You cannot touch "
+    "the whole computer, system files, or paths outside it. If a task needs "
+    "that, use finish to explain you can't do it.\n"
+    "- If the task is ambiguous, risky, destructive, or needs a decision, use "
+    "ask_user to ask ONE clear question instead of guessing.\n"
+    "- If you have already taken an action and seen its result, do NOT repeat "
+    "it — you already have that information. Use it, or move on.\n"
+    "- If you cannot make progress, use ask_user or finish. Never loop.\n"
+    "\n"
+    "Working:\n"
+    "- Explore before you edit (list_dir, read_file).\n"
+    "- write_file replaces the whole file; include the entire new content. Make "
+    "the SMALLEST change that satisfies the task — no extra features, type "
+    "hints, tests, or refactors.\n"
+    "- Use run_bash for grep/find, running tests, and git.\n"
+    "- Verify your change ONCE (run it or the test). The moment it works, use "
+    "finish immediately — never keep editing code that already works.\n"
+    "- finish's content is a short summary of what you did, or why you stopped."
 )

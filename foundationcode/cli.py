@@ -60,7 +60,7 @@ def _approval_mode(args) -> str:
     return Approval.ASK
 
 
-def _make_agent(args, ui: UI) -> Agent:
+def _make_agent(args, ui: UI, interactive: bool) -> Agent:
     fm = FM(model=args.model, greedy=not args.no_greedy)
     fm.ensure_available()
     cwd = os.path.abspath(os.path.expanduser(args.cwd))
@@ -68,22 +68,24 @@ def _make_agent(args, ui: UI) -> Agent:
         raise FMError(f"working directory does not exist: {cwd}")
     tools = Tools(cwd=cwd, ui=ui, approval=_approval_mode(args),
                   bash_timeout=args.bash_timeout)
-    return Agent(fm, tools, ui, max_steps=args.max_steps)
+    return Agent(fm, tools, ui, max_steps=args.max_steps, interactive=interactive)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     ui = UI(color=False if args.no_color else None)
 
+    task = " ".join(args.task).strip()
+    interactive = not bool(task)
+
     try:
-        agent = _make_agent(args, ui)
+        agent = _make_agent(args, ui, interactive)
     except FMError as exc:
         ui.error(str(exc))
         return 2
 
     ui.banner(args.model, agent.tools.cwd)
 
-    task = " ".join(args.task).strip()
     if task:
         ui.task(task)
         return _guarded(lambda: agent.run(task), ui)

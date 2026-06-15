@@ -13,6 +13,7 @@ import unittest
 
 from foundationcode.context import History, build_prompt, PROMPT_CHAR_BUDGET
 from foundationcode.parsing import extract_json, normalize_action, validate_action
+from foundationcode.progress import ProgressTracker
 from foundationcode.tools import Approval, Tools, _DENY_RE
 
 
@@ -184,6 +185,215 @@ class ContextTests(unittest.TestCase):
         p = build_prompt("DO THE THING", History(), "/tmp/proj")
         self.assertIn("DO THE THING", p)
         self.assertIn("/tmp/proj", p)
+
+
+class ProgressTrackerTests(unittest.TestCase):
+    def test_distinct_actions_make_progress(self):
+        t = ProgressTracker(stall_limit=3)
+        self.assertEqual(t.assess("read|a||", "contents A"), 0)
+        self.assertEqual(t.assess("read|b||", "contents B"), 0)
+        self.assertEqual(t.assess("list|.||", "x y z"), 0)
+
+    def test_repeat_with_same_output_stalls(self):
+        t = ProgressTracker(stall_limit=3)
+        t.assess("read|a||", "same")          # first time: progress
+        self.assertEqual(t.stall, 0)
+        s2 = t.assess("read|a||", "same")     # repeat action + repeat output
+        s3 = t.assess("read|a||", "same")
+        self.assertEqual(s2, 1)
+        self.assertEqual(s3, 2)
+        self.assertGreaterEqual(t.assess("read|a||", "same"), 3)  # hits stop
+
+    def test_new_output_resets_stall(self):
+        t = ProgressTracker(stall_limit=3)
+        t.assess("read|a||", "same")
+        t.assess("read|a||", "same")          # stall = 1
+        self.assertEqual(t.assess("write|b||", "ok created"), 0)  # progress resets
+
+    def test_reset(self):
+        t = ProgressTracker(stall_limit=3)
+        t.assess("read|a||", "same")
+        t.assess("read|a||", "same")
+        t.reset()
+        self.assertEqual(t.stall, 0)
+
+
+class SignatureTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="fmc-test-")
+        self.t = Tools(cwd=self.tmp, ui=_FakeUI(), approval=Approval.AUTO)
+
+    def test_relative_and_absolute_path_collapse(self):
+        rel = self.t.signature({"action": "read_file", "path": ".gitignore"})
+        ab = self.t.signature(
+            {"action": "read_file", "path": os.path.join(self.tmp, ".gitignore")})
+        self.assertEqual(rel, ab)  # the exact bug that defeated the old guard
+
+    def test_different_files_differ(self):
+        a = self.t.signature({"action": "read_file", "path": "a.py"})
+        b = self.t.signature({"action": "read_file", "path": "b.py"})
+        self.assertNotEqual(a, b)
+
+
+class NewActionTests(unittest.TestCase):
+    def test_validate_delete_and_ask(self):
+        self.assertIsNotNone(validate_action({"action": "delete_file"}))      # needs path
+        self.assertIsNone(validate_action({"action": "delete_file", "path": "x"}))
+        self.assertIsNotNone(validate_action({"action": "ask_user"}))          # needs content
+        self.assertIsNone(
+            validate_action({"action": "ask_user", "content": "which file?"}))
+
+    def test_normalize_ask_user_packs_question(self):
+        a = normalize_action({"action": "ask_user which file should I edit?"})
+        self.assertEqual(a["action"], "ask_user")
+        self.assertEqual(a["content"], "which file should I edit?")
+
+    def test_normalize_delete_packs_path(self):
+        a = normalize_action({"action": "delete_file old.txt"})
+        self.assertEqual(a["action"], "delete_file")
+        self.assertEqual(a["path"], "old.txt")
+
+
+class DeleteGuardrailTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="fmc-test-")
+        self.t = Tools(cwd=self.tmp, ui=_FakeUI(), approval=Approval.AUTO)
+
+    def _write(self, rel, body="x"):
+        p = os.path.join(self.tmp, rel)
+        os.makedirs(os.path.dirname(p), exist_ok=True) if os.path.dirname(p) else None
+        with open(p, "w") as fh:
+            fh.write(body)
+        return p
+
+    def test_deletes_file_in_cwd(self):
+        p = self._write("junk.txt")
+        _, obs = self.t._delete_file({"action": "delete_file", "path": "junk.txt"})
+        self.assertIn("deleted", obs)
+        self.assertFalse(os.path.exists(p))
+
+    def test_refuses_outside_cwd(self):
+        other = tempfile.NamedTemporaryFile(delete=False)
+        other.write(b"x"); other.close()
+        _, obs = self.t._delete_file({"action": "delete_file", "path": other.name})
+        self.assertIn("outside the working directory", obs)
+        self.assertTrue(os.path.exists(other.name))  # untouched
+        os.unlink(other.name)
+
+    def test_refuses_git_internals(self):
+        self._write(".git/config", "[core]")
+        _, obs = self.t._delete_file({"action": "delete_file", "path": ".git/config"})
+        self.assertIn(".git", obs)
+        self.assertTrue(os.path.exists(os.path.join(self.tmp, ".git/config")))
+
+    def test_refuses_directory(self):
+        os.makedirs(os.path.join(self.tmp, "subdir"))
+        _, obs = self.t._delete_file({"action": "delete_file", "path": "subdir"})
+        self.assertIn("directory", obs)
+
+    def test_readonly_blocks_delete(self):
+        p = self._write("keep.txt")
+        ro = Tools(cwd=self.tmp, ui=_FakeUI(), approval=Approval.READONLY)
+        _, obs = ro._delete_file({"action": "delete_file", "path": "keep.txt"})
+        self.assertIn("blocked", obs)
+        self.assertTrue(os.path.exists(p))
+
+
+class _ScriptedFM:
+    """A fake FM that replays canned replies, for deterministic loop tests."""
+
+    def __init__(self, replies):
+        self.replies = list(replies)
+        self.calls = 0
+
+    def set_schema(self, schema):
+        pass
+
+    def respond(self, prompt, instructions=None, use_schema=True, greedy=None):
+        from foundationcode.fm import FMResult
+        self.calls += 1
+        if not self.replies:
+            return FMResult('{"thought":"d","action":"finish","content":"end"}', True)
+        item = self.replies.pop(0)
+        if isinstance(item, FMResult):
+            return item
+        import json as _json
+        return FMResult(_json.dumps(item), True)
+
+
+class _SilentUI:
+    def __init__(self, answers=None):
+        self.answers = list(answers or [])
+        self.asked = []
+
+    def __getattr__(self, _name):       # swallow all render calls
+        return lambda *a, **k: None
+
+    def confirm(self, *a):
+        return True
+
+    def question_only(self, q):
+        self.asked.append(q)
+
+    def ask_user(self, q):
+        self.asked.append(q)
+        return self.answers.pop(0) if self.answers else ""
+
+
+class AgentControlFlowTests(unittest.TestCase):
+    def _agent(self, fm, ui, interactive=False, **kw):
+        from foundationcode.agent import Agent
+        tmp = tempfile.mkdtemp(prefix="fmc-test-")
+        tools = Tools(cwd=tmp, ui=ui, approval=Approval.AUTO)
+        return Agent(fm, tools, ui, interactive=interactive, **kw)
+
+    def test_finish_returns_done(self):
+        from foundationcode.agent import DONE
+        fm = _ScriptedFM([{"thought": "t", "action": "finish", "content": "done"}])
+        self.assertEqual(self._agent(fm, _SilentUI()).run("x"), DONE)
+
+    def test_ask_user_oneshot_stops_after_asking(self):
+        from foundationcode.agent import DONE
+        fm = _ScriptedFM([{"thought": "t", "action": "ask_user",
+                           "content": "which file?"}])
+        ui = _SilentUI()
+        self.assertEqual(self._agent(fm, ui, interactive=False).run("x"), DONE)
+        self.assertEqual(ui.asked, ["which file?"])
+        self.assertEqual(fm.calls, 1)  # stopped right after asking
+
+    def test_ask_user_interactive_feeds_answer_back(self):
+        from foundationcode.agent import DONE
+        fm = _ScriptedFM([
+            {"thought": "t", "action": "ask_user", "content": "which file?"},
+            {"thought": "t", "action": "finish", "content": "did it"},
+        ])
+        ui = _SilentUI(answers=["app.py"])
+        self.assertEqual(self._agent(fm, ui, interactive=True).run("x"), DONE)
+        self.assertEqual(ui.asked, ["which file?"])
+        self.assertEqual(fm.calls, 2)
+
+    def test_stall_stops_well_before_step_cap(self):
+        from foundationcode.agent import STOPPED
+        fm = _ScriptedFM([{"thought": "t", "action": "list_dir", "path": "."}] * 20)
+        agent = self._agent(fm, _SilentUI(), max_steps=20, stall_limit=3)
+        self.assertEqual(agent.run("x"), STOPPED)
+        self.assertLess(fm.calls, 8)  # self-stopped, didn't grind to 20
+
+    def test_model_errors_recover_then_give_up(self):
+        from foundationcode.agent import STOPPED
+        from foundationcode.fm import FMResult
+        fm = _ScriptedFM([FMResult("", False, "context exceeded")] * 6)
+        agent = self._agent(fm, _SilentUI(), max_invalid=4)
+        self.assertEqual(agent.run("x"), STOPPED)
+        self.assertEqual(fm.calls, 4)  # retried up to max_invalid, then stopped
+
+    def test_fatal_error_stops_immediately(self):
+        from foundationcode.agent import STOPPED
+        from foundationcode.fm import FMResult
+        fm = _ScriptedFM([FMResult("", False, "system model is not available")] * 6)
+        agent = self._agent(fm, _SilentUI(), max_invalid=4)
+        self.assertEqual(agent.run("x"), STOPPED)
+        self.assertEqual(fm.calls, 1)  # no point retrying an unavailable model
 
 
 if __name__ == "__main__":

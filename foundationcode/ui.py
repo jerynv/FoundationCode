@@ -103,6 +103,22 @@ class UI:
             return "always"
         return ans in ("y", "yes")
 
+    def ask_user(self, question: str) -> str:
+        """Show the agent's question and read the user's answer (interactive)."""
+        self.stop_thinking()
+        print(self.c.cyan("\n? ") + self.c.bold(question))
+        try:
+            return input(self.c.cyan("  your answer (Enter to skip): ")).strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return ""
+
+    def question_only(self, question: str) -> None:
+        """Print the agent's question when there's no one to answer (one-shot)."""
+        self.stop_thinking()
+        print(self.c.cyan("\n? ") + self.c.bold(question))
+        print(self.c.dim("  (run interactively — `fmcode` with no task — to answer.)"))
+
     # -- spinner ----------------------------------------------------------
 
     def start_thinking(self, label: str = "thinking") -> None:

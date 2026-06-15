@@ -18,7 +18,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 # Characters, not tokens — a deliberately conservative heuristic (~4 chars/token).
-PROMPT_CHAR_BUDGET = 9000
+# The on-device window is ~4k tokens and the model's *output* must also fit, so
+# we keep history well under half the window to leave room for generation.
+PROMPT_CHAR_BUDGET = 6500
 FULL_DETAIL_STEPS = 3            # most recent steps shown verbatim
 COMPRESSED_OBS_CHARS = 160       # older steps collapse to this much observation
 

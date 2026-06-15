@@ -86,10 +86,13 @@ def normalize_action(action: dict) -> dict:
             rest = parts[1].strip() if len(parts) > 1 else ""
             if rest:
                 verb = parts[0]
-                if verb in ("list_dir", "read_file", "write_file") and not action.get("path"):
+                path_verbs = ("list_dir", "read_file", "write_file", "delete_file")
+                if verb in path_verbs and not action.get("path"):
                     action["path"] = rest
                 elif verb == "run_bash" and not action.get("command"):
                     action["command"] = rest
+                elif verb == "ask_user" and not action.get("content"):
+                    action["content"] = rest
         else:
             action["action"] = name
     return action
@@ -107,12 +110,15 @@ def validate_action(action: dict) -> str | None:
             f"'{name}' is not a valid action. Choose exactly one of: "
             + ", ".join(ALLOWED_ACTIONS)
         )
-    if name in ("list_dir", "read_file", "write_file") and not action.get("path"):
+    if name in ("list_dir", "read_file", "write_file", "delete_file") \
+            and not action.get("path"):
         return f"Action '{name}' requires a non-empty 'path' field."
     if name == "write_file" and action.get("content") is None:
         return "Action 'write_file' requires a 'content' field with the full file."
     if name == "run_bash" and not action.get("command"):
         return "Action 'run_bash' requires a non-empty 'command' field."
+    if name == "ask_user" and not (action.get("content") or "").strip():
+        return "Action 'ask_user' requires a 'content' field with your question."
     if name == "finish" and not (action.get("content") or "").strip():
         return "Action 'finish' requires a 'content' field summarising the result."
     return None
