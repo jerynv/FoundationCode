@@ -20,6 +20,7 @@ from .fm import FM
 from .parsing import extract_json, normalize_action, validate_action
 from .progress import ProgressTracker
 from .schema import ACTION_SCHEMA, SYSTEM_PROMPT
+from .scope import check_scope
 from .tools import Tools
 from .ui import UI
 
@@ -32,7 +33,7 @@ STOPPED = 1
 class Agent:
     def __init__(self, fm: FM, tools: Tools, ui: UI, max_steps: int = 25,
                  max_invalid: int = 3, stall_limit: int = 3,
-                 interactive: bool = False):
+                 interactive: bool = False, scope_check: bool = True):
         self.fm = fm
         self.tools = tools
         self.ui = ui
@@ -40,10 +41,22 @@ class Agent:
         self.max_invalid = max_invalid
         self.stall_limit = stall_limit
         self.interactive = interactive
+        self.scope_check = scope_check
         self.fm.set_schema(ACTION_SCHEMA)
 
     def run(self, task: str) -> int:
         """Run one task. Returns DONE or STOPPED."""
+        # Pre-flight: refuse out-of-scope requests before touching anything,
+        # so a vague "free up space" can't lead to deleting the project.
+        if self.scope_check:
+            self.ui.start_thinking("checking whether I can do this")
+            can_do, reason = check_scope(self.fm, task)
+            self.ui.stop_thinking()
+            if not can_do:
+                self.ui.decline(reason or "This isn't a coding task I can do in "
+                                "this project directory.")
+                return DONE
+
         history = History()
         tracker = ProgressTracker(stall_limit=self.stall_limit)
         consecutive_failures = 0

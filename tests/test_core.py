@@ -257,7 +257,17 @@ class NewActionTests(unittest.TestCase):
 class DeleteGuardrailTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="fmc-test-")
-        self.t = Tools(cwd=self.tmp, ui=_FakeUI(), approval=Approval.AUTO)
+        self.t = Tools(cwd=self.tmp, ui=_FakeUI(), approval=Approval.AUTO,
+                       allow_delete=True)
+
+    def test_disabled_by_default(self):
+        t = Tools(cwd=self.tmp, ui=_FakeUI(), approval=Approval.AUTO)  # no allow_delete
+        p = os.path.join(self.tmp, "keep.txt")
+        with open(p, "w") as fh:
+            fh.write("x")
+        _, obs = t._delete_file({"action": "delete_file", "path": "keep.txt"})
+        self.assertIn("disabled", obs)
+        self.assertTrue(os.path.exists(p))  # untouched
 
     def _write(self, rel, body="x"):
         p = os.path.join(self.tmp, rel)
@@ -302,12 +312,16 @@ class DeleteGuardrailTests(unittest.TestCase):
 class _ScriptedFM:
     """A fake FM that replays canned replies, for deterministic loop tests."""
 
-    def __init__(self, replies):
+    def __init__(self, replies, scope=None):
         self.replies = list(replies)
+        self.scope = scope  # raw JSON string returned by oneshot_json, or None
         self.calls = 0
 
     def set_schema(self, schema):
         pass
+
+    def oneshot_json(self, prompt, instructions, schema, greedy=True):
+        return self.scope
 
     def respond(self, prompt, instructions=None, use_schema=True, greedy=None):
         from foundationcode.fm import FMResult
@@ -345,7 +359,8 @@ class AgentControlFlowTests(unittest.TestCase):
         from foundationcode.agent import Agent
         tmp = tempfile.mkdtemp(prefix="fmc-test-")
         tools = Tools(cwd=tmp, ui=ui, approval=Approval.AUTO)
-        return Agent(fm, tools, ui, interactive=interactive, **kw)
+        # scope_check off here so these tests isolate the action loop.
+        return Agent(fm, tools, ui, interactive=interactive, scope_check=False, **kw)
 
     def test_finish_returns_done(self):
         from foundationcode.agent import DONE
@@ -394,6 +409,39 @@ class AgentControlFlowTests(unittest.TestCase):
         agent = self._agent(fm, _SilentUI(), max_invalid=4)
         self.assertEqual(agent.run("x"), STOPPED)
         self.assertEqual(fm.calls, 1)  # no point retrying an unavailable model
+
+
+class ScopeGateTests(unittest.TestCase):
+    def _agent(self, fm, ui=None):
+        from foundationcode.agent import Agent
+        tmp = tempfile.mkdtemp(prefix="fmc-test-")
+        tools = Tools(cwd=tmp, ui=ui or _SilentUI(), approval=Approval.AUTO)
+        return Agent(fm, tools, ui or _SilentUI(), scope_check=True)
+
+    def test_out_of_scope_declines_without_running_loop(self):
+        from foundationcode.agent import DONE
+        fm = _ScriptedFM(
+            replies=[{"thought": "t", "action": "write_file", "path": "x",
+                      "content": "y"}],
+            scope='{"can_do": false, "reason": "not a coding task"}')
+        self.assertEqual(self._agent(fm).run("free up space on my mac"), DONE)
+        self.assertEqual(fm.calls, 0)  # the action loop never ran
+
+    def test_in_scope_runs_loop(self):
+        from foundationcode.agent import DONE
+        fm = _ScriptedFM(
+            replies=[{"thought": "t", "action": "finish", "content": "done"}],
+            scope='{"can_do": true, "reason": ""}')
+        self.assertEqual(self._agent(fm).run("edit utils.py"), DONE)
+        self.assertEqual(fm.calls, 1)
+
+    def test_fails_open_when_classifier_returns_nothing(self):
+        from foundationcode.agent import DONE
+        fm = _ScriptedFM(
+            replies=[{"thought": "t", "action": "finish", "content": "done"}],
+            scope=None)  # classifier failed -> proceed rather than block real work
+        self.assertEqual(self._agent(fm).run("do a thing"), DONE)
+        self.assertEqual(fm.calls, 1)
 
 
 if __name__ == "__main__":

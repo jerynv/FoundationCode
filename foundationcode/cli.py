@@ -44,6 +44,10 @@ def build_parser() -> argparse.ArgumentParser:
     mode.add_argument("--readonly", action="store_true",
                       help="refuse all writes and shell commands (explore only)")
 
+    p.add_argument("--allow-delete", action="store_true",
+                   help="permit the delete_file action (off by default)")
+    p.add_argument("--no-scope-check", action="store_true",
+                   help="skip the pre-flight 'is this a coding task?' check")
     p.add_argument("--no-greedy", action="store_true",
                    help="use sampling instead of greedy decoding")
     p.add_argument("--no-color", action="store_true", help="disable coloured output")
@@ -67,8 +71,9 @@ def _make_agent(args, ui: UI, interactive: bool) -> Agent:
     if not os.path.isdir(cwd):
         raise FMError(f"working directory does not exist: {cwd}")
     tools = Tools(cwd=cwd, ui=ui, approval=_approval_mode(args),
-                  bash_timeout=args.bash_timeout)
-    return Agent(fm, tools, ui, max_steps=args.max_steps, interactive=interactive)
+                  bash_timeout=args.bash_timeout, allow_delete=args.allow_delete)
+    return Agent(fm, tools, ui, max_steps=args.max_steps, interactive=interactive,
+                 scope_check=not args.no_scope_check)
 
 
 def main(argv: list[str] | None = None) -> int:

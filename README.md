@@ -94,6 +94,13 @@ Three things make this robust on a small model:
    nothing — FoundationCode escalates: first a firm nudge (and a switch to
    sampling), then a graceful stop. It stops *itself* long before the step cap,
    and it can call `ask_user` to hand a decision back to you rather than guess.
+4. **A pre-flight scope check.** A small model can't be trusted to *refuse* an
+   out-of-scope request mid-loop — asked to "free up space on my Mac" it will
+   start deleting your README. But it answers a single yes/no question reliably,
+   so before the loop runs FoundationCode asks the model one thing: *is this a
+   coding task I can do inside this directory?* If not, it declines with the
+   reason instead of flailing. The check fails **open** (errors mean "go ahead")
+   so it never blocks real work, and `--no-scope-check` turns it off.
 
 > The step cap (`--max-steps`, default 25) is a safety backstop, not a target.
 > With progress detection the agent almost always finishes, asks, or stops on
@@ -177,7 +184,7 @@ uses them more reliably.
 | `list_dir`    | `path`           | List a directory                              |
 | `read_file`   | `path`           | Read a file (with line numbers, size-capped)  |
 | `write_file`  | `path`, `content`| Create/overwrite a file (full contents)       |
-| `delete_file` | `path`           | Delete a file (working dir only, never `.git`)|
+| `delete_file` | `path`           | Delete a file — **opt-in** (`--allow-delete`), working dir only |
 | `run_bash`    | `command`        | Run a shell command (grep, tests, git, …)     |
 | `ask_user`    | `content`        | Ask you a question instead of guessing        |
 | `finish`      | `content`        | Stop and return a summary to you              |
@@ -221,6 +228,8 @@ fmcode [task ...]
   --bash-timeout SECS   per-command timeout (default: 60)
   --auto                auto-approve writes and commands
   --readonly            refuse all writes and commands
+  --allow-delete        permit the delete_file action (off by default)
+  --no-scope-check      skip the pre-flight "is this a coding task?" check
   --no-greedy           sample instead of greedy decoding
   --no-color            disable coloured output
   --version

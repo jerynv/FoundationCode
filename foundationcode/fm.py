@@ -130,6 +130,38 @@ class FM:
             return FMResult("", False, err)
         return FMResult(out, True, err or None)
 
+    def oneshot_json(self, prompt: str, instructions: str, schema: dict,
+                     greedy: bool = True) -> str | None:
+        """A one-off structured call with an ad-hoc schema (pre-flight checks).
+
+        Independent of the persistent action schema; returns the raw model text
+        or None on any failure (callers should fail open).
+        """
+        if not self.binary:
+            return None
+        fd, path = tempfile.mkstemp(prefix="fmcode-oneshot-", suffix=".json")
+        with os.fdopen(fd, "w") as fh:
+            json.dump(schema, fh)
+        try:
+            cmd = [self.binary, "respond", "--no-stream", "--model", self.model]
+            if greedy:
+                cmd.append("--greedy")
+            if instructions:
+                cmd += ["--instructions", instructions]
+            cmd += ["--schema", path, prompt]
+            proc = subprocess.run(cmd, capture_output=True, text=True,
+                                  timeout=self.timeout)
+        except Exception:
+            return None
+        finally:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+        if proc.returncode != 0:
+            return None
+        return (proc.stdout or "").strip() or None
+
     # -- cleanup ----------------------------------------------------------
 
     def cleanup(self) -> None:

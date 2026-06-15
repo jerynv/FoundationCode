@@ -85,6 +85,12 @@ class UI:
         print(self.c.green("\n✔ done"))
         print(self.c.bold(text.strip()) + "\n")
 
+    def decline(self, reason: str) -> None:
+        print(self.c.yellow("⊘ I can't do that here."))
+        print("  " + reason.strip())
+        print(self.c.dim("  (I'm a coding agent scoped to this directory. "
+                         "Use --no-scope-check to override.)\n"))
+
     # -- approval ---------------------------------------------------------
 
     def confirm(self, label: str, detail: str):

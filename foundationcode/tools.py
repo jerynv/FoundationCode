@@ -37,13 +37,14 @@ class Approval:
 class Tools:
     def __init__(self, cwd: str, ui, approval: str = Approval.ASK,
                  bash_timeout: int = 60, max_obs_chars: int = 1800,
-                 max_read_bytes: int = 12000):
+                 max_read_bytes: int = 12000, allow_delete: bool = False):
         self.cwd = os.path.abspath(cwd)
         self.ui = ui
         self.approval = approval
         self.bash_timeout = bash_timeout
         self.max_obs_chars = max_obs_chars
         self.max_read_bytes = max_read_bytes
+        self.allow_delete = allow_delete
 
     # -- dispatch ---------------------------------------------------------
 
@@ -187,6 +188,11 @@ class Tools:
         path = self._resolve(action["path"])
         rel = self._rel(path)
         label = f"delete_file {rel}"
+        # Deletion is opt-in: a small model has poor judgement about what is
+        # safe to remove, so it stays off unless the user passed --allow-delete.
+        if not self.allow_delete:
+            return label, ("blocked: file deletion is disabled. Re-run with "
+                           "--allow-delete to permit it, or leave the file alone.")
         # Containment: never delete outside the working directory, the working
         # directory itself, or anything inside .git — even with --auto.
         if not self._within_cwd(path):
