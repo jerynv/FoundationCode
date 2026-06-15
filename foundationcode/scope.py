@@ -24,9 +24,10 @@ SCOPE_SCHEMA: dict = {
         "can_do": {
             "type": "boolean",
             "description": (
-                "true ONLY if this is a software/coding task achievable by "
-                "reading/editing files and running commands INSIDE one project "
-                "directory"
+                "true if this can be accomplished by WRITING or RUNNING a "
+                "script/program/shell commands (including automating a system "
+                "task such as freeing disk space). false only if it "
+                "fundamentally cannot be done with code"
             ),
         },
         "reason": {
@@ -41,12 +42,12 @@ SCOPE_SCHEMA: dict = {
 }
 
 SCOPE_INSTRUCTIONS = (
-    "You judge whether a request is a coding task scoped to a single project "
-    "directory. Requests about the whole computer, freeing disk space, system "
-    "settings, the internet, hardware, personal files, or anything outside the "
-    "project directory are NOT coding tasks and must be can_do=false. Editing "
-    "code, writing files, running tests, or git inside the project are "
-    "can_do=true."
+    "You decide whether a request can be accomplished by writing or running "
+    "code, scripts, or shell commands. Automating a system task — for example a "
+    "script that frees disk space by clearing caches and build artifacts — IS "
+    "doable with code, so can_do=true. Mark can_do=false ONLY if it truly "
+    "cannot be done with code at all: weather, news, booking travel, physical "
+    "hardware, or personal opinions."
 )
 
 

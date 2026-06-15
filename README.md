@@ -94,13 +94,21 @@ Three things make this robust on a small model:
    nothing — FoundationCode escalates: first a firm nudge (and a switch to
    sampling), then a graceful stop. It stops *itself* long before the step cap,
    and it can call `ask_user` to hand a decision back to you rather than guess.
-4. **A pre-flight scope check.** A small model can't be trusted to *refuse* an
-   out-of-scope request mid-loop — asked to "free up space on my Mac" it will
-   start deleting your README. But it answers a single yes/no question reliably,
-   so before the loop runs FoundationCode asks the model one thing: *is this a
-   coding task I can do inside this directory?* If not, it declines with the
-   reason instead of flailing. The check fails **open** (errors mean "go ahead")
-   so it never blocks real work, and `--no-scope-check` turns it off.
+4. **A pre-flight scope check.** A small model can't be trusted to *refuse* a
+   truly impossible request mid-loop, but it answers a single yes/no question
+   reliably. So before the loop runs FoundationCode asks the model one thing:
+   *can this be done by writing or running code?* Things that genuinely can't —
+   the weather, booking a flight — are declined with the reason instead of
+   being flailed at. The check fails **open** (errors mean "go ahead") so it
+   never blocks real work, and `--no-scope-check` turns it off.
+5. **Vetted recipes for codeable-but-dangerous tasks.** "Free up disk space" is
+   a real coding task — the deliverable is a cleanup script — but the on-device
+   model writes *unsafe* ones (it literally generated a script that spawns a
+   root shell and `rm -rf`s your whole cache dir). So for disk cleanup the agent
+   doesn't let the model improvise: it writes a hand-vetted, **report-first**
+   `free-space.sh` that deletes nothing until you run it with `--apply`, only
+   ever touches regenerable junk (caches, build artifacts, Trash, DerivedData),
+   and never uses `sudo` or touches your documents or source.
 
 > The step cap (`--max-steps`, default 25) is a safety backstop, not a target.
 > With progress detection the agent almost always finishes, asks, or stops on
@@ -209,9 +217,9 @@ auto-approve can't be tricked into wiping your disk.
 
 `delete_file` is **contained to the working directory** — it refuses to delete
 anything outside it, the working directory itself, or anything inside `.git`,
-even with `--auto`. The agent also only operates inside the directory you point
-it at; ask it to clean up "your whole device" and it can't (and is told to say
-so).
+even with `--auto`. Ask it to "free up disk space" and it won't improvise `rm`
+commands — it writes a vetted, report-first `free-space.sh` you can read before
+running (see "Vetted recipes" above).
 
 > Still: review what it's about to do. It's a small model and it makes mistakes.
 
@@ -304,6 +312,8 @@ foundationcode/
   parsing.py   # JSON extraction, normalization, validation
   context.py   # context-window budgeting
   progress.py  # no-progress / loop detection
+  scope.py     # pre-flight "can this be done with code?" check
+  recipes.py   # vetted scripts for codeable-but-dangerous tasks
   tools.py     # tools + safety/approval layer
   agent.py     # the agent loop
   ui.py        # terminal rendering

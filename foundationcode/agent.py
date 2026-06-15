@@ -19,6 +19,7 @@ from .context import History, build_prompt
 from .fm import FM
 from .parsing import extract_json, normalize_action, validate_action
 from .progress import ProgressTracker
+from .recipes import FREE_SPACE_SCRIPT, match_cleanup
 from .schema import ACTION_SCHEMA, SYSTEM_PROMPT
 from .scope import check_scope
 from .tools import Tools
@@ -56,6 +57,12 @@ class Agent:
                 self.ui.decline(reason or "This isn't a coding task I can do in "
                                 "this project directory.")
                 return DONE
+
+        # Disk cleanup is a real coding task, but a small model writes dangerous
+        # cleanup scripts (root shells, `rm -rf` of whole cache dirs). Use a
+        # vetted, report-first script instead of letting the model improvise.
+        if match_cleanup(task):
+            return self._run_cleanup_recipe()
 
         history = History()
         tracker = ProgressTracker(stall_limit=self.stall_limit)
@@ -170,6 +177,34 @@ class Agent:
             self.ui.question_only(question)
             return None
         return self.ui.ask_user(question)
+
+    def _run_cleanup_recipe(self) -> int:
+        """Deterministic disk-cleanup: write a vetted, report-first script and
+        run it in (read-only) report mode. Nothing is deleted without --apply."""
+        self.ui.info("This is a disk-cleanup request. Rather than let a small "
+                     "model improvise `rm` commands, I'll write a vetted, "
+                     "report-first script — it deletes nothing until you run it "
+                     "with --apply.")
+        label, obs = self.tools.dispatch(
+            {"action": "write_file", "path": "free-space.sh",
+             "content": FREE_SPACE_SCRIPT})
+        self.ui.action(label)
+        self.ui.observation(obs)
+        if obs.startswith("blocked") or obs.startswith("error"):
+            self.ui.warn("Couldn't write the script (declined or read-only).")
+            return STOPPED
+
+        label, obs = self.tools.dispatch(
+            {"action": "run_bash", "command": "bash free-space.sh"})
+        self.ui.action(label)
+        self.ui.observation(obs)
+
+        self.ui.final(
+            "Wrote free-space.sh — a safe, report-first cleanup script. The "
+            "report above shows what's reclaimable. To actually delete the safe "
+            "junk (caches, build artifacts, Trash), run:  bash free-space.sh --apply"
+        )
+        return DONE
 
 
 def _fatal_error(err: str) -> bool:

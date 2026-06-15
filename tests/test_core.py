@@ -444,5 +444,62 @@ class ScopeGateTests(unittest.TestCase):
         self.assertEqual(fm.calls, 1)
 
 
+class _RecordingTools:
+    """Captures dispatched actions without running anything (recipe-flow tests)."""
+
+    def __init__(self):
+        self.cwd = "/tmp/fake"
+        self.calls = []
+
+    def dispatch(self, action):
+        self.calls.append(action)
+        if action["action"] == "write_file":
+            return ("write_file free-space.sh", "ok: created free-space.sh")
+        return ("run_bash bash free-space.sh", "[exit 0]\n== Disk cleanup ==")
+
+
+class CleanupRecipeTests(unittest.TestCase):
+    def test_matcher_positive(self):
+        from foundationcode.recipes import match_cleanup
+        for t in ["free up some space on my entire mac",
+                  "free up some space across my macbook",
+                  "I'm low on space on my computer",
+                  "clear caches on my mac",
+                  "my disk space is almost gone"]:
+            self.assertTrue(match_cleanup(t), t)
+
+    def test_matcher_negative(self):
+        from foundationcode.recipes import match_cleanup
+        for t in ["free up space in this array",
+                  "clean up this function",
+                  "add a function to utils.py",
+                  "write a parser for the log format"]:
+            self.assertFalse(match_cleanup(t), t)
+
+    def test_script_is_report_first_and_safe(self):
+        from foundationcode.recipes import FREE_SPACE_SCRIPT
+        # Deletes nothing without --apply.
+        self.assertIn("APPLY=0", FREE_SPACE_SCRIPT)
+        # No sudo as an actual command (ignore the "never uses sudo" comment).
+        code = [l for l in FREE_SPACE_SCRIPT.splitlines()
+                if not l.strip().startswith("#")]
+        self.assertFalse(any("sudo" in l for l in code))
+        # Never an unguarded rm of a whole top-level dir.
+        self.assertNotIn("rm -rf ~/Library/Caches\n", FREE_SPACE_SCRIPT)
+        self.assertNotIn('rm -rf "$HOME/Library/Caches"', FREE_SPACE_SCRIPT)
+
+    def test_recipe_flow_writes_vetted_script(self):
+        from foundationcode.agent import Agent, DONE
+        from foundationcode.recipes import FREE_SPACE_SCRIPT
+        tools = _RecordingTools()
+        agent = Agent(_ScriptedFM([]), tools, _SilentUI(), scope_check=False)
+        self.assertEqual(agent.run("free up space on my mac"), DONE)
+        # Wrote the VETTED script (not a model-improvised one), then reported.
+        self.assertEqual(tools.calls[0]["action"], "write_file")
+        self.assertEqual(tools.calls[0]["content"], FREE_SPACE_SCRIPT)
+        self.assertEqual(tools.calls[1]["action"], "run_bash")
+        self.assertIn("free-space.sh", tools.calls[1]["command"])
+
+
 if __name__ == "__main__":
     unittest.main()
