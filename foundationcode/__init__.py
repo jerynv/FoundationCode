@@ -4,5 +4,5 @@ Foundation Models, driven through the `fm` command-line tool.
 Everything runs locally: no API keys, no network, no data leaving the machine.
 """
 
-__version__ = "0.4.0"
+__version__ = "0.4.1"
 __all__ = ["__version__"]

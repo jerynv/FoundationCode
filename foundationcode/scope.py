@@ -24,30 +24,28 @@ SCOPE_SCHEMA: dict = {
         "can_do": {
             "type": "boolean",
             "description": (
-                "true if this can be accomplished by WRITING or RUNNING a "
-                "script/program/shell commands (including automating a system "
-                "task such as freeing disk space). false only if it "
-                "fundamentally cannot be done with code"
+                "true if a computer PROGRAM could attempt it: writing/running "
+                "code, calling an API, automating a browser, fetching or "
+                "processing data. false ONLY if it requires acting in the "
+                "physical world (hardware, driving, cooking) or is not a task a "
+                "computer can perform at all"
             ),
         },
         "reason": {
             "type": "string",
-            "description": (
-                "if can_do is false, one sentence on why and what the user "
-                "should do instead"
-            ),
+            "description": "if false, one sentence on why it needs the physical world",
         },
     },
     "required": ["can_do", "reason"],
 }
 
 SCOPE_INSTRUCTIONS = (
-    "You decide whether a request can be accomplished by writing or running "
-    "code, scripts, or shell commands. Automating a system task — for example a "
-    "script that frees disk space by clearing caches and build artifacts — IS "
-    "doable with code, so can_do=true. Mark can_do=false ONLY if it truly "
-    "cannot be done with code at all: weather, news, booking travel, physical "
-    "hardware, or personal opinions."
+    "Decide if a computer program could ATTEMPT the request. Almost everything "
+    "qualifies: fetching the weather is an API call (true), searching/booking "
+    "flights is an API call (true), freeing disk space is a script (true), "
+    "math, file edits, web scraping, automation — all true. Set can_do=false "
+    "ONLY when it physically cannot be done by a program: repairing hardware, "
+    "driving a car, cooking food, or things that are not computer tasks at all."
 )
 
 

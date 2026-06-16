@@ -97,10 +97,12 @@ Three things make this robust on a small model:
 4. **A pre-flight scope check.** A small model can't be trusted to *refuse* a
    truly impossible request mid-loop, but it answers a single yes/no question
    reliably. So before the loop runs FoundationCode asks the model one thing:
-   *can this be done by writing or running code?* Things that genuinely can't —
-   the weather, booking a flight — are declined with the reason instead of
-   being flailed at. The check fails **open** (errors mean "go ahead") so it
-   never blocks real work, and `--no-scope-check` turns it off.
+   *could a program attempt this at all?* The bar is deliberately low — fetching
+   the weather is an API call, searching flights is an API call, so those are
+   fair game. Only requests that need the **physical world** (fix a faucet,
+   drive you somewhere) are declined with the reason instead of being flailed
+   at. The check fails **open** (errors mean "go ahead") so it never blocks real
+   work, and `--no-scope-check` turns it off.
 5. **Vetted recipes for codeable-but-dangerous tasks.** "Free up disk space" is
    a real coding task — the deliverable is a cleanup script — but the on-device
    model writes *unsafe* ones (it literally generated a script that spawns a
