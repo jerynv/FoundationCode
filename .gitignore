@@ -24,3 +24,6 @@ pip-wheel-metadata/
 # FoundationCode scratch
 *.tmp
 fmcode-schema-*.json
+
+# Agent-generated cleanup script (written into the working dir at runtime)
+free-space.sh
